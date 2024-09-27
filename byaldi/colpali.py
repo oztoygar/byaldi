@@ -8,8 +8,8 @@ from typing import Dict, List, Optional, Union, cast
 import srsly
 import torch
 from colpali_engine.models import ColPali, ColPaliProcessor
-from pdf2image import convert_from_path
 from PIL import Image
+import fitz  # PyMuPDF
 
 from byaldi.objects import Result
 
@@ -462,25 +462,21 @@ class ColPaliModel:
         doc_id: Union[str, int],
         metadata: Optional[Dict[str, Union[str, int]]] = None,
     ):
-        """TODO: THERE ARE TOO MANY FUNCTIONS DOING THINGS HERE. I blame Claude, but this is temporary anyway."""
         if isinstance(item, Path):
             if item.suffix.lower() == ".pdf":
-                with tempfile.TemporaryDirectory() as path:
-                    images = convert_from_path(
-                        item,
-                        thread_count=os.cpu_count()-1,
-                        output_folder=path,
-                        paths_only=True
+                pdf_document = fitz.open(item)
+                for page_num in range(len(pdf_document)):
+                    page = pdf_document.load_page(page_num)
+                    pix = page.get_pixmap()
+                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    self._add_to_index(
+                        img,
+                        store_collection_with_index,
+                        doc_id,
+                        page_id=page_num + 1,
+                        metadata=metadata,
                     )
-                    for i, image_path in enumerate(images):
-                        image = Image.open(image_path)
-                        self._add_to_index(
-                            image,
-                            store_collection_with_index,
-                            doc_id,
-                            page_id=i + 1,
-                            metadata=metadata,
-                        )
+                pdf_document.close()
             elif item.suffix.lower() in [".jpg", ".jpeg", ".png", ".bmp"]:
                 image = Image.open(item)
                 self._add_to_index(
@@ -626,16 +622,6 @@ class ColPaliModel:
     def encode_image(
         self, input_data: Union[str, Image.Image, List[Union[str, Image.Image]]]
     ) -> torch.Tensor:
-        """
-        Compute embeddings for one or more images, PDFs, folders, or image files.
-
-        Args:
-            input_data (Union[str, Image.Image, List[Union[str, Image.Image]]]):
-                A single image, PDF path, folder path, image file path, or a list of these.
-
-        Returns:
-            torch.Tensor: The computed embeddings for the input data.
-        """
         if not isinstance(input_data, list):
             input_data = [input_data]
 
@@ -653,13 +639,13 @@ class ColPaliModel:
                             images.append(Image.open(os.path.join(item, file)))
                 elif item.lower().endswith(".pdf"):
                     # Process PDF
-                    with tempfile.TemporaryDirectory() as path:
-                        pdf_images = convert_from_path(
-                            item,
-                            thread_count=os.cpu_count()-1,
-                            output_folder=path
-                        )
-                        images.extend(pdf_images)
+                    pdf_document = fitz.open(item)
+                    for page_num in range(len(pdf_document)):
+                        page = pdf_document.load_page(page_num)
+                        pix = page.get_pixmap()
+                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                        images.append(img)
+                    pdf_document.close()
                 elif item.lower().endswith(
                     (".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".gif")
                 ):
